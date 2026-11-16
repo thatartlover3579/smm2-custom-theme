@@ -1,0 +1,127 @@
+#include "lib.hpp"
+#include "themes.hpp" 
+#include <nn/hid.h>
+
+// SMM2 v3.0.3 (01009B90006DC000) Function Offsets
+namespace Offsets {
+    constexpr uintptr_t PlayerCalcMove    = 0x008A4210; // Player movement & physics step
+    constexpr uintptr_t EnemyCalcAI       = 0x007B2940; // Base enemy AI update loop
+    constexpr uintptr_t ThemeWheelGetName = 0x00C14890; // Course Maker theme wheel text
+    constexpr uintptr_t EnvColorShader    = 0x00A18450; // Stage ambient RGB color multiplier
+}
+
+static CrossoverTheme g_CurrentTheme = CrossoverTheme::Valorant;
+static bool g_Noclip = false;
+
+// 1. NOCLIP & CROSSOVER CHARACTER PHYSICS
+HOOK_DEFINE_TRAMPOLINE(PlayerMoveHook) {
+    static void Callback(uintptr_t playerActor) {
+        nn::hid::NpadFullKeyState state{};
+        nn::hid::GetNpadState(&state, 0);
+
+        // Toggle Noclip with L + R + D-Pad Up
+        static bool lastCombo = false;
+        bool combo = (state.mButtons & nn::hid::NpadButton::L) &&
+                     (state.mButtons & nn::hid::NpadButton::R) &&
+                     (state.mButtons & nn::hid::NpadButton::Up);
+        if (combo && !lastCombo) g_Noclip = !g_Noclip;
+        lastCombo = combo;
+
+        float* posX = reinterpret_cast<float*>(playerActor + 0x110);
+        float* posY = reinterpret_cast<float*>(playerActor + 0x114);
+        float* velX = reinterpret_cast<float*>(playerActor + 0x120);
+        float* velY = reinterpret_cast<float*>(playerActor + 0x124);
+
+        if (g_Noclip) {
+            *velX = 0.0f;
+            *velY = 0.0f;
+            *posX += (static_cast<float>(state.mAnalogStickL.mX) / 32767.0f) * 6.5f;
+            *posY += (static_cast<float>(state.mAnalogStickL.mY) / 32767.0f) * 6.5f;
+            return;
+        }
+
+        Orig(playerActor);
+
+        const ThemeRules& rules = kThemeTable[static_cast<int>(g_CurrentTheme)];
+
+        if (rules.autoRunner) {
+            *velX = 5.2f * rules.speedMultiplier; // Geometry Dash auto-run
+        } else {
+            *velX *= rules.speedMultiplier;
+        }
+
+        // Valorant / League of Legends Dash (ZL + Y)
+        if ((g_CurrentTheme == CrossoverTheme::Valorant || g_CurrentTheme == CrossoverTheme::LeagueOfLegends) &&
+            (state.mButtons & nn::hid::NpadButton::ZL) && (state.mButtons & nn::hid::NpadButton::Y)) {
+            *velX *= 2.4f;
+        }
+
+        // Fall Guys extra bounce
+        if (rules.bouncyRagdoll && *velY > 0.0f) {
+            *velY *= 1.18f;
+        }
+    }
+};
+
+// 2. CROSSOVER ENEMY AI
+HOOK_DEFINE_TRAMPOLINE(EnemyAIHook) {
+    static void Callback(uintptr_t enemyActor) {
+        Orig(enemyActor);
+
+        float* enemyVelX = reinterpret_cast<float*>(enemyActor + 0x120);
+        float* enemyVelY = reinterpret_cast<float*>(enemyActor + 0x124);
+
+        if (g_CurrentTheme == CrossoverTheme::FNAF) {
+            *enemyVelX *= 1.75f; // Rushing animatronics
+        } else if (g_CurrentTheme == CrossoverTheme::GeometryDash) {
+            *enemyVelX = 0.0f;   // Stationary spikes
+            *enemyVelY = 0.0f;
+        } else if (g_CurrentTheme == CrossoverTheme::LeagueOfLegends) {
+            *enemyVelX *= 1.25f; // Marching minions
+        }
+    }
+};
+
+// 3. VISUAL ATMOSPHERE SHADER TINT (No asset files required)
+HOOK_DEFINE_TRAMPOLINE(EnvColorHook) {
+    static void Callback(uintptr_t envObj, float* rgbOut) {
+        Orig(envObj, rgbOut);
+
+        switch (g_CurrentTheme) {
+            case CrossoverTheme::Valorant:
+                rgbOut[0] *= 0.85f; rgbOut[1] *= 1.10f; rgbOut[2] *= 1.15f; // Tactical teal/cyan tint
+                break;
+            case CrossoverTheme::GeometryDash:
+                rgbOut[0] *= 1.25f; rgbOut[1] *= 0.65f; rgbOut[2] *= 1.35f; // Neon magenta/purple glow
+                break;
+            case CrossoverTheme::FNAF:
+                rgbOut[0] *= 0.18f; rgbOut[1] *= 0.16f; rgbOut[2] *= 0.22f; // Dark pizzeria horror lighting
+                break;
+            case CrossoverTheme::FallGuys:
+                rgbOut[0] *= 1.25f; rgbOut[1] *= 0.90f; rgbOut[2] *= 1.15f; // Bright bubblegum pink tint
+                break;
+            default:
+                break;
+        }
+    }
+};
+
+// 4. COURSE MAKER UI THEME WHEEL LABELS
+HOOK_DEFINE_TRAMPOLINE(ThemeWheelNameHook) {
+    static const char16_t* Callback(int themeId) {
+        if (themeId >= 0 && themeId < 8) {
+            g_CurrentTheme = static_cast<CrossoverTheme>(themeId);
+            return kThemeTable[themeId].displayName;
+        }
+        return Orig(themeId);
+    }
+};
+
+extern "C" void exl_main(void* x0, void* x1) {
+    exl::hook::Initialize();
+
+    PlayerMoveHook::InstallAtOffset(Offsets::PlayerCalcMove);
+    EnemyAIHook::InstallAtOffset(Offsets::EnemyCalcAI);
+    EnvColorHook::InstallAtOffset(Offsets::EnvColorShader);
+    ThemeWheelNameHook::InstallAtOffset(Offsets::ThemeWheelGetName);
+}
