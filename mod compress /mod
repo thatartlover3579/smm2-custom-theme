@@ -1,0 +1,12 @@
+      - name: Compress Raw Assets to .zs via Python
+        run: |
+          pip install zstandard
+          python3 -c '
+          import os, zstandard as zstd
+          os.makedirs("romfs/Model", exist_ok=True)
+          cctx = zstd.ZstdCompressor(level=19)
+          if os.path.exists("raw_assets"):
+              for fname in os.listdir("raw_assets"):
+                  with open(f"raw_assets/{fname}", "rb") as f_in:
+                      with open(f"romfs/Model/{fname}.zs", "wb") as f_out:
+                          f_out.write(cctx.compress(f_in.read())) 
